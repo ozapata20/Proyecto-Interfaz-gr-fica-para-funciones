@@ -1,0 +1,1 @@
+"""Matplotlib graph rendering components."""
