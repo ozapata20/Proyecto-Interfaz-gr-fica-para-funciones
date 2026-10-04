@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from tkinter import messagebox, ttk
 
 import numpy as np
+from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
+from graphing.intersections import IntersectionPoint, find_intersections
 from graphing.plotter import PlotRenderer, PlotSeries
 from utils.reader import ExpressionError, ParsedFunction, parse_function
 
@@ -30,7 +32,7 @@ class GraphingApplication:
 
     def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title("Function Studio | Graficador")
+        self.root.title("Graficador")
         self.root.geometry("1600x900")
         self.root.minsize(900, 600)
         self.root.configure(background="#f2f4ef")
@@ -66,6 +68,7 @@ class GraphingApplication:
         graph_pane.grid(row=0, column=0, sticky="nsew")
         graph_pane.columnconfigure(0, weight=1)
         graph_pane.rowconfigure(1, weight=1)
+        graph_pane.rowconfigure(2, weight=0)
 
         heading = ttk.Frame(graph_pane, style="App.TFrame")
         heading.grid(row=0, column=0, sticky="ew", pady=(0, 14))
@@ -76,11 +79,22 @@ class GraphingApplication:
         chart_frame.grid(row=1, column=0, sticky="nsew")
         chart_frame.columnconfigure(0, weight=1)
         chart_frame.rowconfigure(0, weight=1)
+        chart_frame.rowconfigure(1, weight=0)
         self.figure = Figure(figsize=(7.5, 6.5), dpi=100, facecolor="#ffffff")
         self.axes = self.figure.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.figure, master=chart_frame)
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
         self.plotter = PlotRenderer(self.figure, self.axes, self.canvas.draw_idle)
+        self.canvas.mpl_connect("motion_notify_event", self._on_plot_motion)
+        self.toolbar = NavigationToolbar2Tk(self.canvas, chart_frame, pack_toolbar=False)
+        self.toolbar.update()
+        self.toolbar.grid(row=1, column=0, sticky="ew")
+        self.cursor_label = ttk.Label(
+            graph_pane,
+            text="Cursor: mueve sobre el gráfico para leer coordenadas.",
+            style="Muted.TLabel",
+        )
+        self.cursor_label.grid(row=2, column=0, sticky="w", pady=(8, 0))
 
         divider = ttk.Separator(self.root, orient="vertical")
         divider.place(relx=0.5, rely=0.04, relheight=0.92, anchor="n")
@@ -89,6 +103,7 @@ class GraphingApplication:
         control_pane.grid(row=0, column=1, sticky="nsew")
         control_pane.columnconfigure(0, weight=1)
         control_pane.rowconfigure(7, weight=1)
+        control_pane.rowconfigure(9, weight=0)
 
         ttk.Label(control_pane, text="Funciones", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
@@ -114,6 +129,14 @@ class GraphingApplication:
             style="Accent.TButton",
             command=self._add_expression,
         ).grid(row=0, column=1)
+
+        self.show_intersections_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            control_pane,
+            text="Mostrar intersecciones",
+            variable=self.show_intersections_var,
+            command=self._toggle_intersections,
+        ).grid(row=4, column=0, sticky="w", pady=(12, 0))
 
         range_row = ttk.Frame(control_pane, style="App.TFrame")
         range_row.grid(row=5, column=0, sticky="ew", pady=(20, 18))
@@ -148,6 +171,49 @@ class GraphingApplication:
         self.list_frame.bind("<Configure>", self._resize_scroll_region)
         self.list_canvas.bind("<Configure>", self._resize_list_width)
         self.list_canvas.bind_all("<MouseWheel>", self._scroll_list)
+
+        self.intersections_header = ttk.Frame(control_pane, style="App.TFrame")
+        self.intersections_header.grid(row=8, column=0, sticky="ew", pady=(14, 8))
+        self.intersections_header.columnconfigure(0, weight=1)
+        ttk.Label(
+            self.intersections_header,
+            text="PUNTOS DE INTERSECCIÓN",
+            style="Section.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        self.intersection_count_label = ttk.Label(
+            self.intersections_header,
+            text="0 puntos",
+            style="Count.TLabel",
+        )
+        self.intersection_count_label.grid(row=0, column=1, sticky="e")
+
+        self.intersections_container = ttk.Frame(control_pane, style="Panel.TFrame", padding=6)
+        self.intersections_container.grid(row=9, column=0, sticky="nsew")
+        self.intersections_container.columnconfigure(0, weight=1)
+        self.intersections_container.rowconfigure(0, weight=1)
+        self.intersection_table = ttk.Treeview(
+            self.intersections_container,
+            columns=("identifier", "coordinates", "functions"),
+            show="headings",
+            selectmode="browse",
+        )
+        self.intersection_table.heading("identifier", text="ID")
+        self.intersection_table.heading("coordinates", text="Coordenadas (x, y)")
+        self.intersection_table.heading("functions", text="Funciones")
+        self.intersection_table.column("identifier", width=48, minwidth=42, stretch=False, anchor="center")
+        self.intersection_table.column("coordinates", width=150, minwidth=120, stretch=False)
+        self.intersection_table.column("functions", width=210, minwidth=120, stretch=True)
+        self.intersection_table.grid(row=0, column=0, sticky="nsew")
+        intersection_scrollbar = ttk.Scrollbar(
+            self.intersections_container,
+            orient="vertical",
+            command=self.intersection_table.yview,
+        )
+        intersection_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.intersection_table.configure(yscrollcommand=intersection_scrollbar.set)
+        self.intersections_header.grid_remove()
+        self.intersections_container.grid_remove()
+        self._intersection_points: list[IntersectionPoint] = []
 
         self.empty_list_label = ttk.Label(
             self.list_frame,
@@ -233,6 +299,43 @@ class GraphingApplication:
         if self.list_canvas.winfo_exists():
             self.list_canvas.yview_scroll(int(-event.delta / 120), "units")
 
+    def _on_plot_motion(self, event: object) -> None:
+        coordinates = self.plotter.on_mouse_move(event)
+        if coordinates is None:
+            self.cursor_label.configure(text="Cursor: mueve sobre el gráfico para leer coordenadas.")
+            return
+        self.cursor_label.configure(text=f"Cursor: x = {coordinates[0]:.5g}    y = {coordinates[1]:.5g}")
+
+    def _toggle_intersections(self) -> None:
+        if self.show_intersections_var.get():
+            self.intersections_header.grid()
+            self.intersections_container.grid()
+            self.intersections_container.master.rowconfigure(7, weight=2)
+            self.intersections_container.master.rowconfigure(9, weight=1)
+        else:
+            self.intersections_header.grid_remove()
+            self.intersections_container.grid_remove()
+            self.intersections_container.master.rowconfigure(7, weight=1)
+            self.intersections_container.master.rowconfigure(9, weight=0)
+        self._render()
+
+    def _refresh_intersections(self, points: list[IntersectionPoint]) -> None:
+        self.intersection_count_label.configure(text=f"{len(points)} puntos")
+        self.intersection_table.delete(*self.intersection_table.get_children())
+        if not points:
+            self.intersection_table.insert("", "end", values=("", "Sin intersecciones", ""))
+            return
+        for point in points:
+            self.intersection_table.insert(
+                "",
+                "end",
+                values=(
+                    point.identifier,
+                    f"({point.x:.6g}, {point.y:.6g})",
+                    " · ".join(point.expressions),
+                ),
+            )
+
     def _update_range(self) -> None:
         try:
             x_min = float(self.x_min_var.get())
@@ -258,7 +361,13 @@ class GraphingApplication:
             if item.selected.get()
         ]
         self.count_label.configure(text=f"{len(selected)} activas · {len(self._items)} total")
-        self.plotter.render(selected, x_min, x_max)
+        self._intersection_points = (
+            find_intersections(selected, x_min, x_max)
+            if self.show_intersections_var.get()
+            else []
+        )
+        self._refresh_intersections(self._intersection_points)
+        self.plotter.render(selected, x_min, x_max, self._intersection_points)
 
     def run(self) -> None:
         self.root.mainloop()
