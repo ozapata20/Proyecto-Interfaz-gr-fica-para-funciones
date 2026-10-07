@@ -44,8 +44,8 @@ class PlotRenderer:
         axes.set_facecolor("#ffffff")
         axes.set_xlim(x_min, x_max)
         axes.grid(True, color="#e5e9e3", linewidth=0.8)
-        axes.axhline(0, color="#8e9991", linewidth=0.9, zorder=1)
-        axes.axvline(0, color="#8e9991", linewidth=0.9, zorder=1)
+        axes.axhline(0, color="#657168", linewidth=1.7, zorder=1)
+        axes.axvline(0, color="#657168", linewidth=1.7, zorder=1)
         axes.set_xlabel("x", color="#39443d")
         axes.set_ylabel("y", color="#39443d")
         axes.tick_params(colors="#657168", labelsize=9)
@@ -129,11 +129,11 @@ class PlotRenderer:
             0, color="#59665d", linewidth=0.8, linestyle="--", alpha=0.75, visible=False, zorder=4
         )
         self._cursor_label = self.axes.text(
-            0.02,
+            0.98,
             0.98,
             "",
             transform=self.axes.transAxes,
-            ha="left",
+            ha="right",
             va="top",
             color="#26332b",
             fontsize=9,

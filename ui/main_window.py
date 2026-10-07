@@ -13,16 +13,32 @@ from matplotlib.figure import Figure
 
 from graphing.intersections import IntersectionPoint, find_intersections
 from graphing.plotter import PlotRenderer, PlotSeries
+from utils.analysis import FunctionAnalysis, analyze_function
 from utils.reader import ExpressionError, ParsedFunction, parse_function
 
 
 @dataclass
 class FunctionItem:
+    identifier: str
     expression: str
     function: ParsedFunction
     color: str
     selected: tk.BooleanVar
     row: ttk.Frame
+
+
+def _next_function_identifier(used: set[str]) -> str:
+    index = 5
+    while True:
+        value = index
+        name = ""
+        while value >= 0:
+            value, remainder = divmod(value, 26)
+            name = chr(ord("a") + remainder) + name
+            value -= 1
+        if name not in used:
+            return name
+        index += 1
 
 
 class GraphingApplication:
@@ -56,6 +72,7 @@ class GraphingApplication:
         style.configure("TButton", font=("Segoe UI Semibold", 10), padding=(14, 9))
         style.configure("Accent.TButton", background="#137c63", foreground="#ffffff")
         style.map("Accent.TButton", background=[("active", "#0e654f"), ("pressed", "#0a5542")])
+        style.configure("Info.TButton", font=("Segoe UI Symbol", 12), padding=(6, 4))
         style.configure("TEntry", padding=(10, 9), fieldbackground="#ffffff")
         style.configure("TCheckbutton", background="#ffffff")
 
@@ -237,7 +254,8 @@ class GraphingApplication:
         color = self._PALETTE[len(self._items) % len(self._PALETTE)]
         selected = tk.BooleanVar(value=True)
         row = ttk.Frame(self.list_frame, style="FunctionRow.TFrame", padding=(8, 7))
-        item = FunctionItem(expression, function, color, selected, row)
+        identifier = self._next_function_identifier()
+        item = FunctionItem(identifier, expression, function, color, selected, row)
         self._items.append(item)
         self._refresh_list()
         self.expression_var.set("")
@@ -269,20 +287,175 @@ class GraphingApplication:
             )
             ttk.Label(
                 item.row,
-                text=f"f(x) = {item.expression}",
+                text=f"{item.identifier}(x) = {item.expression}",
                 style="Section.TLabel",
                 font=("Consolas", 11),
             ).grid(row=0, column=2, sticky="w")
             ttk.Button(
                 item.row,
+                text="ⓘ",
+                style="Info.TButton",
+                width=3,
+                command=lambda current=item: self._show_function_info(current),
+            ).grid(row=0, column=3, padx=(8, 0))
+            ttk.Button(
+                item.row,
                 text="Quitar",
                 width=8,
                 command=lambda current=item: self._remove_item(current),
-            ).grid(row=0, column=3, padx=(8, 0))
+            ).grid(row=0, column=4, padx=(8, 0))
         active_count = sum(item.selected.get() for item in self._items)
         self.count_label.configure(text=f"{active_count} activas · {len(self._items)} total")
         self.list_frame.update_idletasks()
         self._resize_scroll_region()
+
+    def _next_function_identifier(self) -> str:
+        return _next_function_identifier({item.identifier for item in self._items})
+
+    def _show_function_info(self, item: FunctionItem) -> None:
+        try:
+            x_min = float(self.x_min_var.get())
+            x_max = float(self.x_max_var.get())
+            if not np.isfinite(x_min) or not np.isfinite(x_max) or x_min >= x_max:
+                x_min = x_max = None
+        except ValueError:
+            x_min = x_max = None
+
+        try:
+            analysis = analyze_function(item.function, x_min, x_max)
+        except (ArithmeticError, TypeError, ValueError, np.linalg.LinAlgError) as error:
+            messagebox.showerror(
+                "No se pudo analizar la función",
+                str(error),
+                parent=self.root,
+            )
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title(f"Información de {item.identifier}(x)")
+        window.transient(self.root)
+        window.resizable(False, False)
+        window.configure(background="#f2f4ef")
+        content = ttk.Frame(window, style="App.TFrame", padding=22)
+        content.grid(sticky="nsew")
+        ttk.Label(
+            content,
+            text=f"{item.identifier}(x) = {item.expression}",
+            style="Title.TLabel",
+            wraplength=500,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 14))
+
+        if analysis.is_polynomial:
+            function_type = (
+                "Polinomio nulo"
+                if analysis.is_zero_function
+                else f"Polinomio de grado {analysis.degree}"
+            )
+        else:
+            function_type = "Función no polinómica"
+        x_intercepts = self._format_x_intercepts(analysis, x_min, x_max)
+        y_intercept = self._format_intercept(analysis.y_intercept)
+        if analysis.degree == 1:
+            rows = [
+                ("Tipo", function_type),
+                ("Pendiente", self._format_value(analysis.slope)),
+                ("Intersección con el eje X", x_intercepts),
+                ("Intersección con el eje Y", y_intercept),
+            ]
+        elif analysis.degree == 2:
+            rows = [
+                ("Tipo", function_type),
+                ("Concavidad", analysis.concavity or "No definida"),
+                ("Vértice", self._format_vertex(analysis)),
+                ("Intersecciones con el eje X", x_intercepts),
+                ("Intersección con el eje Y", y_intercept),
+                ("Eje de simetría", self._format_axis(analysis.symmetry_axis)),
+            ]
+        elif analysis.degree == 3:
+            rows = [
+                ("Tipo", function_type),
+                ("Intersecciones con el eje X", x_intercepts),
+                ("Intersección con el eje Y", y_intercept),
+                ("Punto de inflexión", self._format_point(analysis.inflection_point)),
+            ]
+        else:
+            rows = [
+                ("Tipo", function_type),
+                ("Intersecciones con el eje X", x_intercepts),
+                ("Intersección con el eje Y", y_intercept),
+                ("Vértice", self._format_vertex(analysis)),
+            ]
+        for row_index, (title, value) in enumerate(rows):
+            title_row = row_index * 2 + 1
+            ttk.Label(content, text=title, style="Section.TLabel").grid(
+                row=title_row, column=0, sticky="w", pady=(8, 2)
+            )
+            ttk.Label(
+                content,
+                text=value,
+                style="Muted.TLabel",
+                wraplength=500,
+                justify="left",
+            ).grid(row=title_row + 1, column=0, sticky="w")
+
+        ttk.Button(content, text="Cerrar", command=window.destroy).grid(
+            row=len(rows) * 2 + 1, column=0, sticky="e", pady=(18, 0)
+        )
+        window.update_idletasks()
+        width = window.winfo_reqwidth()
+        height = window.winfo_reqheight()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+        x = max(0, min(x, self.root.winfo_screenwidth() - width))
+        y = max(0, min(y, self.root.winfo_screenheight() - height))
+        window.geometry(f"+{x}+{y}")
+        window.grab_set()
+
+    @staticmethod
+    def _format_value(value: float | None) -> str:
+        return "No definida" if value is None else f"{value:.6g}"
+
+    @staticmethod
+    def _format_axis(value: float | None) -> str:
+        return "No definido" if value is None else f"x = {value:.6g}"
+
+    @staticmethod
+    def _format_point(point: tuple[float, float] | None) -> str:
+        if point is None:
+            return "No definido"
+        return f"({point[0]:.6g}, {point[1]:.6g})"
+
+    @staticmethod
+    def _format_intercept(value: float | None) -> str:
+        return "No definida para x = 0" if value is None else f"(0, {value:.6g})"
+
+    @staticmethod
+    def _format_x_intercepts(
+        analysis: FunctionAnalysis,
+        x_min: float | None,
+        x_max: float | None,
+    ) -> str:
+        if analysis.is_zero_function:
+            return "Todos los puntos del eje X"
+        if analysis.x_intercepts is None:
+            return "No se pudieron calcular"
+        if not analysis.x_intercepts:
+            return "No hay intersecciones reales"
+        coordinates = ", ".join(f"({value:.6g}, 0)" for value in analysis.x_intercepts)
+        if analysis.is_polynomial:
+            return coordinates
+        if x_min is None or x_max is None:
+            return "No se pudieron calcular (intervalo de x no válido)"
+        return f"{coordinates} (aproximadas en [{x_min:g}, {x_max:g}])"
+
+    @staticmethod
+    def _format_vertex(analysis: FunctionAnalysis) -> str:
+        if analysis.vertex is not None:
+            x_value, y_value = analysis.vertex
+            return f"({x_value:.6g}, {y_value:.6g})"
+        if analysis.is_polynomial and analysis.degree == 2:
+            return "No definido"
+        return "Solo se calcula para polinomios cuadráticos"
 
     def _remove_item(self, item: FunctionItem) -> None:
         self._items.remove(item)
@@ -356,7 +529,7 @@ class GraphingApplication:
         except ValueError:
             return
         selected = [
-            PlotSeries(f"f(x) = {item.expression}", item.function, item.color)
+            PlotSeries(f"{item.identifier}(x) = {item.expression}", item.function, item.color)
             for item in self._items
             if item.selected.get()
         ]
