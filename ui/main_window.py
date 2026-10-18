@@ -5,6 +5,7 @@ from __future__ import annotations
 import tkinter as tk
 from dataclasses import dataclass
 from tkinter import messagebox, ttk
+from typing import Callable
 
 import numpy as np
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
@@ -25,6 +26,24 @@ class FunctionItem:
     color: str
     selected: tk.BooleanVar
     row: ttk.Frame
+
+
+class GraphNavigationToolbar(NavigationToolbar2Tk):
+    """Use Home to fit the current set of visible functions."""
+
+    def __init__(
+        self,
+        canvas: FigureCanvasTkAgg,
+        window: ttk.Frame,
+        reset_view: Callable[[], None],
+    ) -> None:
+        self._reset_view = reset_view
+        super().__init__(canvas, window, pack_toolbar=False)
+
+    def home(self) -> None:
+        self._nav_stack.clear()
+        self._reset_view()
+        self.push_current()
 
 
 def _next_function_identifier(used: set[str]) -> str:
@@ -53,9 +72,23 @@ class GraphingApplication:
         self.root.minsize(900, 600)
         self.root.configure(background="#f2f4ef")
         self._items: list[FunctionItem] = []
+        self._controls_visible = True
+        self._dark_mode_var = tk.BooleanVar(value=False)
+        self.show_intersections_var = tk.BooleanVar(value=False)
+        self.x_min_var = tk.StringVar(value="-10")
+        self.x_max_var = tk.StringVar(value="10")
+        self.y_min_var = tk.StringVar()
+        self.y_max_var = tk.StringVar()
+        self._pending_dark_mode_var = tk.BooleanVar(value=False)
+        self._pending_show_intersections_var = tk.BooleanVar(value=False)
+        self._pending_x_min_var = tk.StringVar(value="-10")
+        self._pending_x_max_var = tk.StringVar(value="10")
+        self._pending_y_min_var = tk.StringVar()
+        self._pending_y_max_var = tk.StringVar()
+        self._settings_window: tk.Toplevel | None = None
         self._build_styles()
         self._build_layout()
-        self._render()
+        self._render(preserve_view=False)
 
     def _build_styles(self) -> None:
         style = ttk.Style(self.root)
@@ -69,6 +102,7 @@ class GraphingApplication:
         style.configure("Muted.TLabel", foreground="#728077", font=("Segoe UI", 9))
         style.configure("Count.TLabel", foreground="#137c63", font=("Segoe UI Semibold", 10))
         style.configure("FunctionRow.TFrame", background="#ffffff")
+        style.configure("FunctionRow.TLabel", background="#ffffff")
         style.configure("TButton", font=("Segoe UI Semibold", 10), padding=(14, 9))
         style.configure("Accent.TButton", background="#137c63", foreground="#ffffff")
         style.map("Accent.TButton", background=[("active", "#0e654f"), ("pressed", "#0a5542")])
@@ -77,8 +111,8 @@ class GraphingApplication:
         style.configure("TCheckbutton", background="#ffffff")
 
     def _build_layout(self) -> None:
-        self.root.columnconfigure(0, weight=1, uniform="panes")
-        self.root.columnconfigure(1, weight=1, uniform="panes")
+        self.root.columnconfigure(0, weight=7)
+        self.root.columnconfigure(1, weight=3)
         self.root.rowconfigure(0, weight=1)
 
         graph_pane = ttk.Frame(self.root, style="App.TFrame", padding=(24, 22, 18, 22))
@@ -103,7 +137,7 @@ class GraphingApplication:
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
         self.plotter = PlotRenderer(self.figure, self.axes, self.canvas.draw_idle)
         self.canvas.mpl_connect("motion_notify_event", self._on_plot_motion)
-        self.toolbar = NavigationToolbar2Tk(self.canvas, chart_frame, pack_toolbar=False)
+        self.toolbar = GraphNavigationToolbar(self.canvas, chart_frame, self._reset_plot_view)
         self.toolbar.update()
         self.toolbar.grid(row=1, column=0, sticky="ew")
         self.cursor_label = ttk.Label(
@@ -113,27 +147,49 @@ class GraphingApplication:
         )
         self.cursor_label.grid(row=2, column=0, sticky="w", pady=(8, 0))
 
-        divider = ttk.Separator(self.root, orient="vertical")
-        divider.place(relx=0.5, rely=0.04, relheight=0.92, anchor="n")
+        self.divider = ttk.Separator(self.root, orient="vertical")
+        self.divider.place(relx=0.7, rely=0.04, relheight=0.92, anchor="n")
 
-        control_pane = ttk.Frame(self.root, style="App.TFrame", padding=(28, 28, 24, 22))
-        control_pane.grid(row=0, column=1, sticky="nsew")
-        control_pane.columnconfigure(0, weight=1)
-        control_pane.rowconfigure(7, weight=1)
-        control_pane.rowconfigure(9, weight=0)
+        self.control_pane = ttk.Frame(self.root, style="App.TFrame", padding=(28, 28, 24, 22))
+        self.control_pane.grid(row=0, column=1, sticky="nsew")
+        self.control_pane.columnconfigure(0, weight=1)
+        self.control_pane.rowconfigure(5, weight=1)
+        self.control_pane.rowconfigure(7, weight=0)
 
-        ttk.Label(control_pane, text="Funciones", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        self.panel_toggle = tk.Canvas(
+            self.root,
+            width=42,
+            height=42,
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self.panel_toggle.bind("<Button-1>", self._toggle_control_pane)
+        self._draw_panel_toggle()
+        self.root.bind("<Configure>", self._on_root_configure, add="+")
+
+        self.settings_button = tk.Canvas(
+            self.root,
+            width=40,
+            height=40,
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self.settings_button.bind("<Button-1>", self._open_settings)
+        self.settings_button.place(relx=0.985, rely=0.015, anchor="ne")
+        self._draw_settings_button()
+
+        ttk.Label(self.control_pane, text="Funciones", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
-            control_pane,
+            self.control_pane,
             text="Escribe una expresión y activa las curvas que quieras comparar.",
             style="Muted.TLabel",
             wraplength=600,
         ).grid(row=1, column=0, sticky="w", pady=(4, 22))
 
-        ttk.Label(control_pane, text="NUEVA EXPRESIÓN", style="Section.TLabel").grid(
+        ttk.Label(self.control_pane, text="NUEVA EXPRESIÓN", style="Section.TLabel").grid(
             row=2, column=0, sticky="w", pady=(0, 8)
         )
-        input_row = ttk.Frame(control_pane, style="App.TFrame")
+        input_row = ttk.Frame(self.control_pane, style="App.TFrame")
         input_row.grid(row=3, column=0, sticky="ew")
         input_row.columnconfigure(0, weight=1)
         self.expression_var = tk.StringVar()
@@ -147,34 +203,15 @@ class GraphingApplication:
             command=self._add_expression,
         ).grid(row=0, column=1)
 
-        self.show_intersections_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            control_pane,
-            text="Mostrar intersecciones",
-            variable=self.show_intersections_var,
-            command=self._toggle_intersections,
-        ).grid(row=4, column=0, sticky="w", pady=(12, 0))
-
-        range_row = ttk.Frame(control_pane, style="App.TFrame")
-        range_row.grid(row=5, column=0, sticky="ew", pady=(20, 18))
-        ttk.Label(range_row, text="Intervalo de x", style="Section.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 12))
-        self.x_min_var = tk.StringVar(value="-10")
-        self.x_max_var = tk.StringVar(value="10")
-        ttk.Label(range_row, text="de", style="Muted.TLabel").grid(row=0, column=1, padx=(0, 5))
-        ttk.Entry(range_row, textvariable=self.x_min_var, width=9).grid(row=0, column=2, padx=(0, 10))
-        ttk.Label(range_row, text="a", style="Muted.TLabel").grid(row=0, column=3, padx=(0, 5))
-        ttk.Entry(range_row, textvariable=self.x_max_var, width=9).grid(row=0, column=4, padx=(0, 10))
-        ttk.Button(range_row, text="Actualizar", command=self._update_range).grid(row=0, column=5)
-
-        list_header = ttk.Frame(control_pane, style="App.TFrame")
-        list_header.grid(row=6, column=0, sticky="ew", pady=(0, 9))
+        list_header = ttk.Frame(self.control_pane, style="App.TFrame")
+        list_header.grid(row=4, column=0, sticky="ew", pady=(20, 9))
         list_header.columnconfigure(0, weight=1)
         ttk.Label(list_header, text="LISTA DE FUNCIONES", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         self.count_label = ttk.Label(list_header, text="0 activas · 0 total", style="Count.TLabel")
         self.count_label.grid(row=0, column=1, sticky="e")
 
-        list_container = ttk.Frame(control_pane, style="Panel.TFrame", padding=8)
-        list_container.grid(row=7, column=0, sticky="nsew")
+        list_container = ttk.Frame(self.control_pane, style="Panel.TFrame", padding=8)
+        list_container.grid(row=5, column=0, sticky="nsew")
         list_container.columnconfigure(0, weight=1)
         list_container.rowconfigure(0, weight=1)
         self.list_canvas = tk.Canvas(list_container, background="#ffffff", highlightthickness=0)
@@ -189,8 +226,8 @@ class GraphingApplication:
         self.list_canvas.bind("<Configure>", self._resize_list_width)
         self.list_canvas.bind_all("<MouseWheel>", self._scroll_list)
 
-        self.intersections_header = ttk.Frame(control_pane, style="App.TFrame")
-        self.intersections_header.grid(row=8, column=0, sticky="ew", pady=(14, 8))
+        self.intersections_header = ttk.Frame(self.control_pane, style="App.TFrame")
+        self.intersections_header.grid(row=6, column=0, sticky="ew", pady=(14, 8))
         self.intersections_header.columnconfigure(0, weight=1)
         ttk.Label(
             self.intersections_header,
@@ -204,8 +241,8 @@ class GraphingApplication:
         )
         self.intersection_count_label.grid(row=0, column=1, sticky="e")
 
-        self.intersections_container = ttk.Frame(control_pane, style="Panel.TFrame", padding=6)
-        self.intersections_container.grid(row=9, column=0, sticky="nsew")
+        self.intersections_container = ttk.Frame(self.control_pane, style="Panel.TFrame", padding=6)
+        self.intersections_container.grid(row=7, column=0, sticky="nsew")
         self.intersections_container.columnconfigure(0, weight=1)
         self.intersections_container.rowconfigure(0, weight=1)
         self.intersection_table = ttk.Treeview(
@@ -242,6 +279,236 @@ class GraphingApplication:
 
         self.expression_entry.focus_set()
 
+    def _draw_panel_toggle(self) -> None:
+        background = "#f2f4ef" if not self._dark_mode_var.get() else "#1e2521"
+        foreground = "#18231d" if not self._dark_mode_var.get() else "#e6ece7"
+        self.panel_toggle.configure(background=background)
+        self.panel_toggle.delete("all")
+        self.panel_toggle.create_oval(2, 2, 40, 40, fill=background, outline=foreground, width=1.5)
+        arrow = (17, 12, 25, 21, 17, 30) if self._controls_visible else (25, 12, 17, 21, 25, 30)
+        self._panel_arrow_id = self.panel_toggle.create_line(
+            *arrow,
+            fill=foreground,
+            width=2.5,
+            capstyle=tk.ROUND,
+            joinstyle=tk.ROUND,
+        )
+        self._position_panel_toggle()
+
+    def _position_panel_toggle(self) -> None:
+        if self._controls_visible:
+            x = self.control_pane.winfo_x() + self.control_pane.winfo_width() - 8
+        else:
+            x = self.root.winfo_width() - 8
+        self.panel_toggle.place(x=x, y=max(0, self.root.winfo_height() - 12), anchor="se")
+
+    def _on_root_configure(self, event: tk.Event[tk.Misc]) -> None:
+        if event.widget is self.root:
+            self.root.after_idle(self._position_panel_toggle)
+
+    def _draw_settings_button(self) -> None:
+        background = "#f2f4ef" if not self._dark_mode_var.get() else "#1e2521"
+        foreground = "#18231d" if not self._dark_mode_var.get() else "#e6ece7"
+        self.settings_button.configure(background=background)
+        self.settings_button.delete("all")
+        self.settings_button.create_oval(2, 2, 38, 38, fill=background, outline=foreground, width=1.2)
+        self.settings_button.create_text(20, 20, text="⚙", fill=foreground, font=("Segoe UI Symbol", 17))
+
+    def _toggle_control_pane(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        self._controls_visible = not self._controls_visible
+        if self._controls_visible:
+            self.root.columnconfigure(0, weight=7)
+            self.root.columnconfigure(1, weight=3)
+            self.control_pane.grid()
+            self.divider.place(relx=0.7, rely=0.04, relheight=0.92, anchor="n")
+        else:
+            self.control_pane.grid_remove()
+            self.root.columnconfigure(0, weight=1)
+            self.root.columnconfigure(1, weight=0)
+            self.divider.place_forget()
+        self._draw_panel_toggle()
+        self.root.after_idle(self._position_panel_toggle)
+
+    def _open_settings(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        if self._settings_window is not None and self._settings_window.winfo_exists():
+            self._settings_window.deiconify()
+            self._settings_window.lift()
+            return
+
+        self._pending_dark_mode_var.set(self._dark_mode_var.get())
+        self._pending_show_intersections_var.set(self.show_intersections_var.get())
+        self._pending_x_min_var.set(self.x_min_var.get())
+        self._pending_x_max_var.set(self.x_max_var.get())
+        self._pending_y_min_var.set(self.y_min_var.get())
+        self._pending_y_max_var.set(self.y_max_var.get())
+
+        window = tk.Toplevel(self.root)
+        self._settings_window = window
+        window.title("Configuración")
+        window.transient(self.root)
+        window.resizable(False, False)
+        window.configure(background="#f2f4ef")
+        window.protocol("WM_DELETE_WINDOW", self._close_settings)
+        content = ttk.Frame(window, style="App.TFrame", padding=22)
+        content.grid(sticky="nsew")
+        ttk.Label(content, text="Configuración", style="Title.TLabel").grid(
+            row=0, column=0, columnspan=4, sticky="w", pady=(0, 16)
+        )
+        ttk.Checkbutton(
+            content,
+            text="Modo oscuro",
+            variable=self._pending_dark_mode_var,
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 8))
+        ttk.Checkbutton(
+            content,
+            text="Mostrar intersecciones",
+            variable=self._pending_show_intersections_var,
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(0, 18))
+
+        ttk.Label(content, text="Intervalo de X", style="Section.TLabel").grid(
+            row=3, column=0, columnspan=4, sticky="w", pady=(0, 8)
+        )
+        self._add_range_inputs(content, 4, self._pending_x_min_var, self._pending_x_max_var)
+        ttk.Label(content, text="Intervalo de Y", style="Section.TLabel").grid(
+            row=5, column=0, columnspan=4, sticky="w", pady=(18, 4)
+        )
+        ttk.Label(
+            content,
+            text="Deja ambos límites vacíos para ajustar automáticamente.",
+            style="Muted.TLabel",
+        ).grid(row=6, column=0, columnspan=4, sticky="w", pady=(0, 8))
+        self._add_range_inputs(content, 7, self._pending_y_min_var, self._pending_y_max_var)
+        ttk.Button(
+            content,
+            text="Aplicar",
+            style="Accent.TButton",
+            command=self._apply_settings,
+        ).grid(row=8, column=0, columnspan=4, sticky="e", pady=(20, 0))
+        window.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - window.winfo_reqwidth()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - window.winfo_reqheight()) // 2
+        window.geometry(f"+{max(0, x)}+{max(0, y)}")
+        window.grab_set()
+
+    @staticmethod
+    def _add_range_inputs(
+        parent: ttk.Frame,
+        row: int,
+        minimum: tk.StringVar,
+        maximum: tk.StringVar,
+    ) -> None:
+        ttk.Label(parent, text="Desde", style="Muted.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 8))
+        ttk.Entry(parent, textvariable=minimum, width=12).grid(row=row, column=1, sticky="ew", padx=(0, 16))
+        ttk.Label(parent, text="Hasta", style="Muted.TLabel").grid(row=row, column=2, sticky="w", padx=(0, 8))
+        ttk.Entry(parent, textvariable=maximum, width=12).grid(row=row, column=3, sticky="ew")
+
+    def _close_settings(self) -> None:
+        if self._settings_window is not None:
+            self._settings_window.grab_release()
+            self._settings_window.destroy()
+            self._settings_window = None
+
+    def _apply_settings(self) -> None:
+        try:
+            x_min = float(self._pending_x_min_var.get())
+            x_max = float(self._pending_x_max_var.get())
+            if not np.isfinite(x_min) or not np.isfinite(x_max) or x_min >= x_max:
+                raise ValueError("El límite inicial de X debe ser menor que el final.")
+            y_min = self._pending_y_min_var.get().strip()
+            y_max = self._pending_y_max_var.get().strip()
+            if bool(y_min) != bool(y_max):
+                raise ValueError("Completa ambos límites de Y o deja ambos vacíos.")
+            if y_min and y_max:
+                parsed_y_min = float(y_min)
+                parsed_y_max = float(y_max)
+                if (
+                    not np.isfinite(parsed_y_min)
+                    or not np.isfinite(parsed_y_max)
+                    or parsed_y_min >= parsed_y_max
+                ):
+                    raise ValueError("El límite inferior de Y debe ser menor que el superior.")
+        except ValueError as error:
+            messagebox.showerror("Intervalo no válido", str(error), parent=self._settings_window or self.root)
+            return
+
+        previous_y_limits = self._read_y_limits()
+        ranges_changed = (
+            (x_min, x_max) != (float(self.x_min_var.get()), float(self.x_max_var.get()))
+            or (None if not y_min else (parsed_y_min, parsed_y_max)) != previous_y_limits
+        )
+        previous_intersections = self.show_intersections_var.get()
+        self.x_min_var.set(self._pending_x_min_var.get())
+        self.x_max_var.set(self._pending_x_max_var.get())
+        self.y_min_var.set(y_min)
+        self.y_max_var.set(y_max)
+        self._dark_mode_var.set(self._pending_dark_mode_var.get())
+        self.show_intersections_var.set(self._pending_show_intersections_var.get())
+        if previous_intersections != self.show_intersections_var.get():
+            self._toggle_intersections(redraw=False)
+        self._apply_theme(redraw=False)
+        self._render(preserve_view=not ranges_changed)
+
+    def _apply_theme(self, *, redraw: bool = True) -> None:
+        dark = self._dark_mode_var.get()
+        colors = {
+            "background": "#1e2521" if dark else "#f2f4ef",
+            "panel": "#29322d" if dark else "#ffffff",
+            "foreground": "#e6ece7" if dark else "#18231d",
+            "muted": "#a3b0a7" if dark else "#728077",
+            "section": "#d5ded8" if dark else "#26332b",
+            "grid": "#3d4942" if dark else "#e5e9e3",
+            "axis": "#a3b0a7" if dark else "#657168",
+            "spine": "#536158" if dark else "#d8ded7",
+        }
+        style = ttk.Style(self.root)
+        self.root.configure(background=colors["background"])
+        style.configure("App.TFrame", background=colors["background"])
+        style.configure("Panel.TFrame", background=colors["panel"])
+        style.configure("FunctionRow.TFrame", background=colors["panel"])
+        style.configure("FunctionRow.TLabel", background=colors["panel"], foreground=colors["section"])
+        style.configure("TLabel", background=colors["background"], foreground=colors["foreground"])
+        style.configure("Title.TLabel", foreground=colors["foreground"])
+        style.configure("Section.TLabel", foreground=colors["section"])
+        style.configure("Muted.TLabel", foreground=colors["muted"])
+        style.configure("Count.TLabel", foreground="#58c5a4" if dark else "#137c63")
+        style.configure("TCheckbutton", background=colors["background"], foreground=colors["foreground"])
+        style.map(
+            "TCheckbutton",
+            background=[("active", colors["background"])],
+            foreground=[("active", colors["foreground"])],
+        )
+        style.configure("TEntry", fieldbackground=colors["panel"], foreground=colors["foreground"])
+        style.configure("TButton", background=colors["panel"], foreground=colors["foreground"])
+        style.configure("Accent.TButton", background="#137c63", foreground="#ffffff")
+        style.map("Accent.TButton", background=[("active", "#0e654f"), ("pressed", "#0a5542")])
+        style.configure(
+            "Treeview",
+            background=colors["panel"],
+            fieldbackground=colors["panel"],
+            foreground=colors["foreground"],
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=colors["background"],
+            foreground=colors["foreground"],
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", "#137c63")],
+            foreground=[("selected", "#ffffff")],
+        )
+        style.configure("TScrollbar", background=colors["panel"], troughcolor=colors["background"])
+        self.list_canvas.configure(background=colors["panel"])
+        self.canvas.get_tk_widget().configure(background=colors["panel"])
+        self.toolbar.configure(background=colors["background"])
+        self.figure.set_facecolor(colors["panel"])
+        self._draw_settings_button()
+        if self._settings_window is not None and self._settings_window.winfo_exists():
+            self._settings_window.configure(background=colors["background"])
+        self._draw_panel_toggle()
+        if redraw:
+            self._render()
+
     def _add_expression(self, _event: tk.Event[tk.Misc] | None = None) -> str:
         expression = self.expression_var.get().strip()
         try:
@@ -251,6 +518,7 @@ class GraphingApplication:
             self.expression_entry.focus_set()
             return "break"
 
+        is_first_function = not self._items
         color = self._PALETTE[len(self._items) % len(self._PALETTE)]
         selected = tk.BooleanVar(value=True)
         row = ttk.Frame(self.list_frame, style="FunctionRow.TFrame", padding=(8, 7))
@@ -260,8 +528,11 @@ class GraphingApplication:
         self._refresh_list()
         self.expression_var.set("")
         self.expression_entry.focus_set()
-        self._render()
+        self._render(preserve_view=not is_first_function)
         return "break"
+
+    def _reset_plot_view(self) -> None:
+        self._render(preserve_view=False)
 
     def _refresh_list(self) -> None:
         for child in self.list_frame.winfo_children():
@@ -288,7 +559,7 @@ class GraphingApplication:
             ttk.Label(
                 item.row,
                 text=f"{item.identifier}(x) = {item.expression}",
-                style="Section.TLabel",
+                style="FunctionRow.TLabel",
                 font=("Consolas", 11),
             ).grid(row=0, column=2, sticky="w")
             ttk.Button(
@@ -335,7 +606,7 @@ class GraphingApplication:
         window.title(f"Información de {item.identifier}(x)")
         window.transient(self.root)
         window.resizable(False, False)
-        window.configure(background="#f2f4ef")
+        window.configure(background="#1e2521" if self._dark_mode_var.get() else "#f2f4ef")
         content = ttk.Frame(window, style="App.TFrame", padding=22)
         content.grid(sticky="nsew")
         ttk.Label(
@@ -479,18 +750,19 @@ class GraphingApplication:
             return
         self.cursor_label.configure(text=f"Cursor: x = {coordinates[0]:.5g}    y = {coordinates[1]:.5g}")
 
-    def _toggle_intersections(self) -> None:
+    def _toggle_intersections(self, *, redraw: bool = True) -> None:
         if self.show_intersections_var.get():
             self.intersections_header.grid()
             self.intersections_container.grid()
-            self.intersections_container.master.rowconfigure(7, weight=2)
-            self.intersections_container.master.rowconfigure(9, weight=1)
+            self.intersections_container.master.rowconfigure(5, weight=2)
+            self.intersections_container.master.rowconfigure(7, weight=1)
         else:
             self.intersections_header.grid_remove()
             self.intersections_container.grid_remove()
-            self.intersections_container.master.rowconfigure(7, weight=1)
-            self.intersections_container.master.rowconfigure(9, weight=0)
-        self._render()
+            self.intersections_container.master.rowconfigure(5, weight=1)
+            self.intersections_container.master.rowconfigure(7, weight=0)
+        if redraw:
+            self._render()
 
     def _refresh_intersections(self, points: list[IntersectionPoint]) -> None:
         self.intersection_count_label.configure(text=f"{len(points)} puntos")
@@ -509,23 +781,26 @@ class GraphingApplication:
                 ),
             )
 
-    def _update_range(self) -> None:
-        try:
-            x_min = float(self.x_min_var.get())
-            x_max = float(self.x_max_var.get())
-            if not np.isfinite(x_min) or not np.isfinite(x_max) or x_min >= x_max:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Intervalo no válido", "El límite inicial debe ser menor que el final.", parent=self.root)
-            return
-        self._render()
+    def _read_y_limits(self) -> tuple[float, float] | None:
+        minimum = self.y_min_var.get().strip()
+        maximum = self.y_max_var.get().strip()
+        if not minimum and not maximum:
+            return None
+        if not minimum or not maximum:
+            raise ValueError("Ambos límites de Y son necesarios.")
+        y_min = float(minimum)
+        y_max = float(maximum)
+        if not np.isfinite(y_min) or not np.isfinite(y_max) or y_min >= y_max:
+            raise ValueError("El límite inferior de Y debe ser menor que el superior.")
+        return y_min, y_max
 
-    def _render(self) -> None:
+    def _render(self, *, preserve_view: bool = True) -> None:
         try:
             x_min = float(self.x_min_var.get())
             x_max = float(self.x_max_var.get())
             if not np.isfinite(x_min) or not np.isfinite(x_max) or x_min >= x_max:
                 return
+            y_limits = self._read_y_limits()
         except ValueError:
             return
         selected = [
@@ -540,7 +815,15 @@ class GraphingApplication:
             else []
         )
         self._refresh_intersections(self._intersection_points)
-        self.plotter.render(selected, x_min, x_max, self._intersection_points)
+        self.plotter.render(
+            selected,
+            x_min,
+            x_max,
+            self._intersection_points,
+            y_limits=y_limits,
+            dark_mode=self._dark_mode_var.get(),
+            preserve_view=preserve_view,
+        )
 
     def run(self) -> None:
         self.root.mainloop()

@@ -38,20 +38,44 @@ class PlotRenderer:
         x_min: float,
         x_max: float,
         intersections: Sequence[IntersectionPoint] = (),
+        *,
+        y_limits: tuple[float, float] | None = None,
+        dark_mode: bool = False,
+        preserve_view: bool = False,
     ) -> None:
         axes = self.axes
+        view_limits = (axes.get_xlim(), axes.get_ylim()) if preserve_view else None
+        background = "#29322d" if dark_mode else "#ffffff"
+        foreground = "#e6ece7" if dark_mode else "#18231d"
+        muted = "#a3b0a7" if dark_mode else "#657168"
+        grid = "#3d4942" if dark_mode else "#e5e9e3"
+        spine_color = "#536158" if dark_mode else "#d8ded7"
         axes.clear()
-        axes.set_facecolor("#ffffff")
+        axes.set_facecolor(background)
         axes.set_xlim(x_min, x_max)
-        axes.grid(True, color="#e5e9e3", linewidth=0.8)
-        axes.axhline(0, color="#657168", linewidth=1.7, zorder=1)
-        axes.axvline(0, color="#657168", linewidth=1.7, zorder=1)
-        axes.set_xlabel("x", color="#39443d")
-        axes.set_ylabel("y", color="#39443d")
-        axes.tick_params(colors="#657168", labelsize=9)
-        for spine in axes.spines.values():
-            spine.set_color("#d8ded7")
+        if y_limits is not None:
+            axes.set_ylim(*y_limits)
+        axes.grid(True, color=grid, linewidth=0.8)
+        axes.axhline(0, color=muted, linewidth=1.7, zorder=1)
+        axes.axvline(0, color=muted, linewidth=1.7, zorder=1)
+        axes.set_xlabel("x", color=foreground)
+        axes.set_ylabel("y", color=foreground)
+        axes.tick_params(colors=muted, labelsize=9)
+        for axis_spine in axes.spines.values():
+            axis_spine.set_color(spine_color)
         self._create_cursor_artists()
+        if dark_mode:
+            self._cursor_vertical.set_color("#b8c8bd")
+            self._cursor_horizontal.set_color("#b8c8bd")
+            self._cursor_label.set_color(foreground)
+            self._cursor_label.set_bbox(
+                {
+                    "boxstyle": "round,pad=0.35",
+                    "facecolor": background,
+                    "edgecolor": spine_color,
+                    "alpha": 0.94,
+                }
+            )
 
         if not series:
             axes.text(
@@ -61,9 +85,12 @@ class PlotRenderer:
                 transform=axes.transAxes,
                 ha="center",
                 va="center",
-                color="#7a857d",
+                color=muted,
                 fontsize=12,
             )
+            if view_limits is not None:
+                axes.set_xlim(view_limits[0])
+                axes.set_ylim(view_limits[1])
             self.figure.tight_layout(pad=2.0)
             self._draw()
             return
@@ -93,15 +120,16 @@ class PlotRenderer:
                 padding = max(abs(float(lower)) * 0.1, 1.0)
             else:
                 padding = (upper - lower) * 0.12
-            axes.set_ylim(float(lower - padding), float(upper + padding))
+            if y_limits is None:
+                axes.set_ylim(float(lower - padding), float(upper + padding))
 
         for point in intersections:
             axes.scatter(
                 [point.x],
                 [point.y],
                 s=50,
-                facecolor="#ffffff",
-                edgecolor="#18231d",
+                facecolor=background,
+                edgecolor=foreground,
                 linewidth=1.5,
                 zorder=5,
             )
@@ -110,14 +138,23 @@ class PlotRenderer:
                 (point.x, point.y),
                 xytext=(7, 7),
                 textcoords="offset points",
-                color="#18231d",
+                color=foreground,
                 fontsize=9,
                 fontweight="bold",
-                bbox={"boxstyle": "round,pad=0.2", "facecolor": "#ffffff", "edgecolor": "#d8ded7"},
+                bbox={"boxstyle": "round,pad=0.2", "facecolor": background, "edgecolor": spine_color},
                 zorder=6,
             )
 
         axes.legend(loc="upper left", frameon=True, framealpha=0.92, fontsize=9)
+        legend = axes.get_legend()
+        if legend is not None:
+            legend.get_frame().set_facecolor(background)
+            legend.get_frame().set_edgecolor(spine_color)
+            for text in legend.get_texts():
+                text.set_color(foreground)
+        if view_limits is not None:
+            axes.set_xlim(view_limits[0])
+            axes.set_ylim(view_limits[1])
         self.figure.tight_layout(pad=2.0)
         self._draw()
 
