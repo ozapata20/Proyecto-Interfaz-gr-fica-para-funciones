@@ -12,6 +12,7 @@ from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
+from graphing.geometries import GeometricFigure, render_geometry_2d, render_geometry_3d
 from graphing.intersections import IntersectionPoint, find_intersections
 from graphing.plotter import PlotRenderer, PlotSeries
 from utils.analysis import FunctionAnalysis, analyze_function
@@ -24,6 +25,13 @@ class FunctionItem:
     expression: str
     function: ParsedFunction
     color: str
+    selected: tk.BooleanVar
+    row: ttk.Frame
+
+
+@dataclass
+class GeometryItem:
+    figure: GeometricFigure
     selected: tk.BooleanVar
     row: ttk.Frame
 
@@ -67,11 +75,25 @@ class GraphingApplication:
 
     def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title("Graficador")
+        self.root.title("Visualizador de funciones y geometría")
         self.root.geometry("1600x900")
         self.root.minsize(900, 600)
         self.root.configure(background="#f2f4ef")
         self._items: list[FunctionItem] = []
+        self._geometry_items: dict[str, list[GeometryItem]] = {
+            "Geometría 2D": [],
+            "Geometría 3D": [],
+        }
+        self._geometry_panes: dict[str, ttk.Frame] = {}
+        self._geometry_selectors: dict[str, ttk.Combobox] = {}
+        self._geometry_field_frames: dict[str, ttk.Frame] = {}
+        self._geometry_fields: dict[str, dict[str, ttk.Entry]] = {}
+        self._geometry_list_frames: dict[str, ttk.Frame] = {}
+        self._geometry_list_canvases: dict[str, tk.Canvas] = {}
+        self._geometry_counts: dict[str, ttk.Label] = {}
+        self._geometry_counter = 0
+        self._mode = "Funciones"
+        self._projection = "2d"
         self._controls_visible = True
         self._dark_mode_var = tk.BooleanVar(value=False)
         self.show_intersections_var = tk.BooleanVar(value=False)
@@ -107,6 +129,8 @@ class GraphingApplication:
         style.configure("Accent.TButton", background="#137c63", foreground="#ffffff")
         style.map("Accent.TButton", background=[("active", "#0e654f"), ("pressed", "#0a5542")])
         style.configure("Info.TButton", font=("Segoe UI Symbol", 12), padding=(6, 4))
+        style.configure("Mode.TButton", anchor="w", padding=(14, 12))
+        style.configure("Close.TButton", padding=(6, 3))
         style.configure("TEntry", padding=(10, 9), fieldbackground="#ffffff")
         style.configure("TCheckbutton", background="#ffffff")
 
@@ -123,8 +147,10 @@ class GraphingApplication:
 
         heading = ttk.Frame(graph_pane, style="App.TFrame")
         heading.grid(row=0, column=0, sticky="ew", pady=(0, 14))
-        ttk.Label(heading, text="Function Studio", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(heading, text="VISUALIZACIÓN CARTESIANA", style="Muted.TLabel").pack(anchor="w", pady=(3, 0))
+        self.chart_title = ttk.Label(heading, text="      Funciones", style="Title.TLabel")
+        self.chart_title.pack(anchor="w")
+        self.chart_subtitle = ttk.Label(heading, text="                PLANO CARTESIANO", style="Muted.TLabel")
+        self.chart_subtitle.pack(anchor="w", pady=(3, 0))
 
         chart_frame = ttk.Frame(graph_pane, style="Panel.TFrame", padding=8)
         chart_frame.grid(row=1, column=0, sticky="nsew")
@@ -153,8 +179,12 @@ class GraphingApplication:
         self.control_pane = ttk.Frame(self.root, style="App.TFrame", padding=(28, 28, 24, 22))
         self.control_pane.grid(row=0, column=1, sticky="nsew")
         self.control_pane.columnconfigure(0, weight=1)
-        self.control_pane.rowconfigure(5, weight=1)
-        self.control_pane.rowconfigure(7, weight=0)
+        self.control_pane.rowconfigure(0, weight=1)
+        self.function_pane = ttk.Frame(self.control_pane, style="App.TFrame")
+        self.function_pane.grid(row=0, column=0, sticky="nsew")
+        self.function_pane.columnconfigure(0, weight=1)
+        self.function_pane.rowconfigure(5, weight=1)
+        self.function_pane.rowconfigure(7, weight=0)
 
         self.panel_toggle = tk.Canvas(
             self.root,
@@ -178,18 +208,33 @@ class GraphingApplication:
         self.settings_button.place(relx=0.985, rely=0.015, anchor="ne")
         self._draw_settings_button()
 
-        ttk.Label(self.control_pane, text="Funciones", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        self.mode_toggle = tk.Canvas(
+            self.root,
+            width=42,
+            height=42,
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self.mode_toggle.bind("<Button-1>", self._toggle_mode_menu)
+        self.mode_toggle.place(x=12, y=12)
+        self._draw_mode_toggle()
+        self.mode_menu = ttk.Frame(self.root, style="Panel.TFrame", padding=20)
+        self.mode_menu.place(relx=0, rely=0, relwidth=0.25, relheight=1)
+        self.mode_menu.place_forget()
+        self._build_mode_menu()
+
+        ttk.Label(self.function_pane, text="Funciones", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
-            self.control_pane,
-            text="Escribe una expresión y activa las curvas que quieras comparar.",
+            self.function_pane,
+            text="Inserta las funciones que deseas visualizar y gestiona las funciones que se muestran en el plano.",
             style="Muted.TLabel",
             wraplength=600,
         ).grid(row=1, column=0, sticky="w", pady=(4, 22))
 
-        ttk.Label(self.control_pane, text="NUEVA EXPRESIÓN", style="Section.TLabel").grid(
+        ttk.Label(self.function_pane, text="NUEVA EXPRESIÓN", style="Section.TLabel").grid(
             row=2, column=0, sticky="w", pady=(0, 8)
         )
-        input_row = ttk.Frame(self.control_pane, style="App.TFrame")
+        input_row = ttk.Frame(self.function_pane, style="App.TFrame")
         input_row.grid(row=3, column=0, sticky="ew")
         input_row.columnconfigure(0, weight=1)
         self.expression_var = tk.StringVar()
@@ -203,14 +248,14 @@ class GraphingApplication:
             command=self._add_expression,
         ).grid(row=0, column=1)
 
-        list_header = ttk.Frame(self.control_pane, style="App.TFrame")
+        list_header = ttk.Frame(self.function_pane, style="App.TFrame")
         list_header.grid(row=4, column=0, sticky="ew", pady=(20, 9))
         list_header.columnconfigure(0, weight=1)
         ttk.Label(list_header, text="LISTA DE FUNCIONES", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         self.count_label = ttk.Label(list_header, text="0 activas · 0 total", style="Count.TLabel")
         self.count_label.grid(row=0, column=1, sticky="e")
 
-        list_container = ttk.Frame(self.control_pane, style="Panel.TFrame", padding=8)
+        list_container = ttk.Frame(self.function_pane, style="Panel.TFrame", padding=8)
         list_container.grid(row=5, column=0, sticky="nsew")
         list_container.columnconfigure(0, weight=1)
         list_container.rowconfigure(0, weight=1)
@@ -226,7 +271,7 @@ class GraphingApplication:
         self.list_canvas.bind("<Configure>", self._resize_list_width)
         self.list_canvas.bind_all("<MouseWheel>", self._scroll_list)
 
-        self.intersections_header = ttk.Frame(self.control_pane, style="App.TFrame")
+        self.intersections_header = ttk.Frame(self.function_pane, style="App.TFrame")
         self.intersections_header.grid(row=6, column=0, sticky="ew", pady=(14, 8))
         self.intersections_header.columnconfigure(0, weight=1)
         ttk.Label(
@@ -241,7 +286,7 @@ class GraphingApplication:
         )
         self.intersection_count_label.grid(row=0, column=1, sticky="e")
 
-        self.intersections_container = ttk.Frame(self.control_pane, style="Panel.TFrame", padding=6)
+        self.intersections_container = ttk.Frame(self.function_pane, style="Panel.TFrame", padding=6)
         self.intersections_container.grid(row=7, column=0, sticky="nsew")
         self.intersections_container.columnconfigure(0, weight=1)
         self.intersections_container.rowconfigure(0, weight=1)
@@ -277,7 +322,284 @@ class GraphingApplication:
         )
         self.empty_list_label.grid(row=0, column=0, sticky="w")
 
+        self._build_geometry_manager("Geometría 2D", ("Punto", "Círculo", "Rectángulo"))
+        self._build_geometry_manager("Geometría 3D", ("Esfera", "Plano"))
+        self.root.tk.call("raise", self.mode_toggle._w)
         self.expression_entry.focus_set()
+
+    def _build_mode_menu(self) -> None:
+        header = ttk.Frame(self.mode_menu, style="Panel.TFrame")
+        header.pack(fill="x", pady=(0, 24))
+        ttk.Label(header, text="Espacio de trabajo", style="Title.TLabel").pack(side="left")
+        ttk.Button(
+            header,
+            text="✕",
+            style="Close.TButton",
+            command=self._hide_mode_menu,
+        ).pack(side="right")
+        ttk.Label(
+            self.mode_menu,
+            text="Elige qué deseas visualizar.",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(0, 12))
+        self._mode_buttons: dict[str, ttk.Button] = {}
+        for mode in ("Funciones", "Geometría 2D", "Geometría 3D"):
+            button = ttk.Button(
+                self.mode_menu,
+                text=mode,
+                style="Mode.TButton",
+                command=lambda selected_mode=mode: self._select_mode(selected_mode),
+            )
+            button.pack(fill="x", pady=4)
+            self._mode_buttons[mode] = button
+        self._update_mode_buttons()
+
+    def _build_geometry_manager(self, mode: str, kinds: tuple[str, ...]) -> None:
+        pane = ttk.Frame(self.control_pane, style="App.TFrame")
+        pane.columnconfigure(0, weight=1)
+        pane.rowconfigure(7, weight=1)
+        self._geometry_panes[mode] = pane
+
+        title = "Geometría 2D" if mode == "Geometría 2D" else "Geometría 3D"
+        ttk.Label(pane, text=title, style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        explanation = (
+            "Configura e inserta figuras en el plano cartesiano."
+            if mode == "Geometría 2D"
+            else "Configura e inserta figuras en el espacio tridimensional."
+        )
+        ttk.Label(
+            pane,
+            text=explanation,
+            style="Muted.TLabel",
+            wraplength=600,
+        ).grid(row=1, column=0, sticky="w", pady=(4, 18))
+        ttk.Label(pane, text="FIGURA", style="Section.TLabel").grid(row=2, column=0, sticky="w", pady=(0, 8))
+        selector = ttk.Combobox(pane, state="readonly", values=kinds)
+        selector.current(0)
+        selector.grid(row=3, column=0, sticky="ew")
+        self._geometry_selectors[mode] = selector
+        fields_frame = ttk.Frame(pane, style="App.TFrame")
+        fields_frame.grid(row=4, column=0, sticky="ew", pady=(10, 4))
+        self._geometry_field_frames[mode] = fields_frame
+        selector.bind(
+            "<<ComboboxSelected>>",
+            lambda _event, selected_mode=mode: self._update_geometry_fields(selected_mode),
+        )
+        ttk.Button(
+            pane,
+            text="Insertar figura +",
+            style="Accent.TButton",
+            command=lambda selected_mode=mode: self._add_geometry(selected_mode),
+        ).grid(row=5, column=0, sticky="e", pady=(4, 14))
+        list_header = ttk.Frame(pane, style="App.TFrame")
+        list_header.grid(row=6, column=0, sticky="ew", pady=(4, 8))
+        list_header.columnconfigure(0, weight=1)
+        ttk.Label(list_header, text="FIGURAS INSERTADAS", style="Section.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        count = ttk.Label(list_header, text="0 activas · 0 total", style="Count.TLabel")
+        count.grid(row=0, column=1, sticky="e")
+        self._geometry_counts[mode] = count
+        list_container = ttk.Frame(pane, style="Panel.TFrame", padding=8)
+        list_container.grid(row=7, column=0, sticky="nsew")
+        list_container.columnconfigure(0, weight=1)
+        list_container.rowconfigure(0, weight=1)
+        list_canvas = tk.Canvas(list_container, background="#ffffff", highlightthickness=0)
+        list_canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=list_canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        list_canvas.configure(yscrollcommand=scrollbar.set)
+        list_frame = ttk.Frame(list_canvas, style="Panel.TFrame")
+        list_frame.columnconfigure(0, weight=1)
+        list_window = list_canvas.create_window((0, 0), window=list_frame, anchor="nw")
+        list_frame.bind(
+            "<Configure>",
+            lambda _event, canvas=list_canvas: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        list_canvas.bind(
+            "<Configure>",
+            lambda event, canvas=list_canvas, window=list_window: canvas.itemconfigure(
+                window, width=event.width
+            ),
+        )
+        self._geometry_list_frames[mode] = list_frame
+        self._geometry_list_canvases[mode] = list_canvas
+        ttk.Label(
+            list_frame,
+            text="Aún no hay figuras. Selecciona una y configúrala arriba.",
+            style="Muted.TLabel",
+            padding=(12, 16),
+        ).grid(row=0, column=0, sticky="w")
+        self._update_geometry_fields(mode)
+
+    def _update_geometry_fields(self, mode: str) -> None:
+        field_definitions: dict[str, dict[str, tuple[str, str]]] = {
+            "Punto": {"x": ("x", "0"), "y": ("y", "0")},
+            "Círculo": {"x": ("Centro x", "0"), "y": ("Centro y", "0"), "r": ("Radio", "3")},
+            "Rectángulo": {
+                "x": ("Origen x", "-2"),
+                "y": ("Origen y", "-1"),
+                "width": ("Ancho", "4"),
+                "height": ("Alto", "2"),
+            },
+            "Esfera": {
+                "x": ("Centro x", "0"),
+                "y": ("Centro y", "0"),
+                "z": ("Centro z", "0"),
+                "r": ("Radio", "3"),
+            },
+            "Plano": {"a": ("a (x)", "0"), "b": ("b (y)", "0"), "c": ("c", "0")},
+        }
+        frame = self._geometry_field_frames[mode]
+        for child in frame.winfo_children():
+            child.destroy()
+        selected_kind = self._geometry_selectors[mode].get()
+        entries: dict[str, ttk.Entry] = {}
+        for index, (parameter, (label, default)) in enumerate(field_definitions[selected_kind].items()):
+            row, column = divmod(index, 2)
+            ttk.Label(frame, text=label, style="Muted.TLabel").grid(
+                row=row, column=column * 2, sticky="w", padx=(0, 6), pady=4
+            )
+            entry = ttk.Entry(frame, width=10)
+            entry.insert(0, default)
+            entry.grid(row=row, column=column * 2 + 1, sticky="ew", padx=(0, 12), pady=4)
+            frame.columnconfigure(column * 2 + 1, weight=1)
+            entries[parameter] = entry
+        self._geometry_fields[mode] = entries
+
+    def _add_geometry(self, mode: str) -> None:
+        kind = self._geometry_selectors[mode].get()
+        try:
+            parameters = {
+                name: float(entry.get())
+                for name, entry in self._geometry_fields[mode].items()
+            }
+            if not all(np.isfinite(value) for value in parameters.values()):
+                raise ValueError("Todos los parámetros deben ser números finitos.")
+            if kind in {"Círculo", "Esfera"} and parameters["r"] <= 0:
+                raise ValueError("El radio debe ser mayor que cero.")
+            if kind == "Rectángulo" and (
+                parameters["width"] <= 0 or parameters["height"] <= 0
+            ):
+                raise ValueError("El ancho y el alto deben ser mayores que cero.")
+        except ValueError as error:
+            messagebox.showerror("Parámetros no válidos", str(error), parent=self.root)
+            return
+
+        self._geometry_counter += 1
+        figure = GeometricFigure(
+            identifier=f"{kind} {self._geometry_counter}",
+            kind=kind,
+            parameters=parameters,
+            color=self._PALETTE[(self._geometry_counter - 1) % len(self._PALETTE)],
+        )
+        self._geometry_items[mode].append(GeometryItem(figure, tk.BooleanVar(value=True), ttk.Frame()))
+        self._refresh_geometry_list(mode)
+        self._render(preserve_view=True)
+
+    def _refresh_geometry_list(self, mode: str) -> None:
+        list_frame = self._geometry_list_frames[mode]
+        for child in list_frame.winfo_children():
+            child.destroy()
+        items = self._geometry_items[mode]
+        if not items:
+            ttk.Label(
+                list_frame,
+                text="Aún no hay figuras. Selecciona una y configúrala arriba.",
+                style="Muted.TLabel",
+                padding=(12, 16),
+            ).grid(row=0, column=0, sticky="w")
+        for index, item in enumerate(items):
+            item.row = ttk.Frame(list_frame, style="FunctionRow.TFrame", padding=(8, 7))
+            item.row.grid(row=index, column=0, sticky="ew", pady=2)
+            item.row.columnconfigure(2, weight=1)
+            ttk.Checkbutton(
+                item.row,
+                variable=item.selected,
+                command=self._render,
+            ).grid(row=0, column=0, padx=(0, 8))
+            tk.Frame(item.row, width=10, height=10, background=item.figure.color).grid(
+                row=0, column=1, sticky="w", padx=(0, 8)
+            )
+            ttk.Label(
+                item.row,
+                text=self._format_geometry_label(item.figure),
+                style="FunctionRow.TLabel",
+                wraplength=320,
+            ).grid(row=0, column=2, sticky="w")
+            ttk.Button(
+                item.row,
+                text="Quitar",
+                width=8,
+                command=lambda current=item, selected_mode=mode: self._remove_geometry(
+                    selected_mode, current
+                ),
+            ).grid(row=0, column=3, padx=(8, 0))
+        active_count = sum(item.selected.get() for item in items)
+        self._geometry_counts[mode].configure(text=f"{active_count} activas · {len(items)} total")
+
+    @staticmethod
+    def _format_geometry_label(figure: GeometricFigure) -> str:
+        parameters = ", ".join(
+            f"{name}={value:g}" for name, value in figure.parameters.items()
+        )
+        return f"{figure.identifier} ({parameters})"
+
+    def _remove_geometry(self, mode: str, item: GeometryItem) -> None:
+        self._geometry_items[mode].remove(item)
+        self._refresh_geometry_list(mode)
+        self._render()
+
+    def _draw_mode_toggle(self) -> None:
+        background = "#f2f4ef" if not self._dark_mode_var.get() else "#1e2521"
+        foreground = "#18231d" if not self._dark_mode_var.get() else "#e6ece7"
+        self.mode_toggle.configure(background=background)
+        self.mode_toggle.delete("all")
+        self.mode_toggle.create_oval(2, 2, 40, 40, fill=background, outline=foreground, width=1.2)
+        for y in (13, 20, 27):
+            self.mode_toggle.create_line(13, y, 29, y, fill=foreground, width=2, capstyle=tk.ROUND)
+
+    def _toggle_mode_menu(self, _event: tk.Event[tk.Misc] | None = None) -> None:
+        if self.mode_menu.winfo_ismapped():
+            self._hide_mode_menu()
+            return
+        self.mode_menu.place(relx=0, rely=0, relwidth=0.25, relheight=1)
+        self.mode_menu.lift()
+
+    def _hide_mode_menu(self) -> None:
+        self.mode_menu.place_forget()
+        self.root.tk.call("raise", self.mode_toggle._w)
+
+    def _update_mode_buttons(self) -> None:
+        for mode, button in self._mode_buttons.items():
+            button.configure(style="Accent.TButton" if mode == self._mode else "Mode.TButton")
+
+    def _select_mode(self, mode: str) -> None:
+        self._mode = mode
+        for pane in self._geometry_panes.values():
+            pane.grid_remove()
+        if mode == "Funciones":
+            self.function_pane.grid()
+            self.chart_title.configure(text="Plano Cartesiano")
+            self.chart_subtitle.configure(text="FUNCIONES")
+        else:
+            self._geometry_panes[mode].grid(row=0, column=0, sticky="nsew")
+            self.chart_title.configure(text="Plano Cartesiano" if mode == "Geometría 2D" else "Espacio tridimensional")
+            self.chart_subtitle.configure(text=mode.upper())
+        self._update_mode_buttons()
+        projection = "3d" if mode == "Geometría 3D" else "2d"
+        if projection != self._projection:
+            self.axes.remove()
+            self.axes = self.figure.add_subplot(
+                111,
+                projection="3d" if projection == "3d" else None,
+            )
+            self.plotter = PlotRenderer(self.figure, self.axes, self.canvas.draw_idle)
+            self._projection = projection
+            self.toolbar._nav_stack.clear()
+            self.toolbar.update()
+        self._hide_mode_menu()
+        self._render(preserve_view=False)
 
     def _draw_panel_toggle(self) -> None:
         background = "#f2f4ef" if not self._dark_mode_var.get() else "#1e2521"
@@ -351,7 +673,7 @@ class GraphingApplication:
         window.protocol("WM_DELETE_WINDOW", self._close_settings)
         content = ttk.Frame(window, style="App.TFrame", padding=22)
         content.grid(sticky="nsew")
-        ttk.Label(content, text="Configuración", style="Title.TLabel").grid(
+        ttk.Label(content, text="Ajustes avanzados", style="Title.TLabel").grid(
             row=0, column=0, columnspan=4, sticky="w", pady=(0, 16)
         )
         ttk.Checkbutton(
@@ -369,7 +691,11 @@ class GraphingApplication:
             row=3, column=0, columnspan=4, sticky="w", pady=(0, 8)
         )
         self._add_range_inputs(content, 4, self._pending_x_min_var, self._pending_x_max_var)
-        ttk.Label(content, text="Intervalo de Y", style="Section.TLabel").grid(
+        ttk.Label(
+            content,
+            text="Intervalo de Z" if self._mode == "Geometría 3D" else "Intervalo de Y",
+            style="Section.TLabel",
+        ).grid(
             row=5, column=0, columnspan=4, sticky="w", pady=(18, 4)
         )
         ttk.Label(
@@ -499,10 +825,13 @@ class GraphingApplication:
         )
         style.configure("TScrollbar", background=colors["panel"], troughcolor=colors["background"])
         self.list_canvas.configure(background=colors["panel"])
+        for list_canvas in self._geometry_list_canvases.values():
+            list_canvas.configure(background=colors["panel"])
         self.canvas.get_tk_widget().configure(background=colors["panel"])
         self.toolbar.configure(background=colors["background"])
         self.figure.set_facecolor(colors["panel"])
         self._draw_settings_button()
+        self._draw_mode_toggle()
         if self._settings_window is not None and self._settings_window.winfo_exists():
             self._settings_window.configure(background=colors["background"])
         self._draw_panel_toggle()
@@ -566,7 +895,7 @@ class GraphingApplication:
                 item.row,
                 text="ⓘ",
                 style="Info.TButton",
-                width=3,
+                width=5,
                 command=lambda current=item: self._show_function_info(current),
             ).grid(row=0, column=3, padx=(8, 0))
             ttk.Button(
@@ -744,6 +1073,8 @@ class GraphingApplication:
             self.list_canvas.yview_scroll(int(-event.delta / 120), "units")
 
     def _on_plot_motion(self, event: object) -> None:
+        if self._mode != "Funciones":
+            return
         coordinates = self.plotter.on_mouse_move(event)
         if coordinates is None:
             self.cursor_label.configure(text="Cursor: mueve sobre el gráfico para leer coordenadas.")
@@ -802,6 +1133,40 @@ class GraphingApplication:
                 return
             y_limits = self._read_y_limits()
         except ValueError:
+            return
+        if self._mode == "Geometría 2D":
+            figures = [
+                item.figure for item in self._geometry_items[self._mode] if item.selected.get()
+            ]
+            self._geometry_counts[self._mode].configure(
+                text=f"{len(figures)} activas · {len(self._geometry_items[self._mode])} total"
+            )
+            render_geometry_2d(
+                self.axes,
+                figures,
+                (x_min, x_max),
+                y_limits,
+                dark_mode=self._dark_mode_var.get(),
+                preserve_view=preserve_view,
+            )
+            self.canvas.draw_idle()
+            return
+        if self._mode == "Geometría 3D":
+            figures = [
+                item.figure for item in self._geometry_items[self._mode] if item.selected.get()
+            ]
+            self._geometry_counts[self._mode].configure(
+                text=f"{len(figures)} activas · {len(self._geometry_items[self._mode])} total"
+            )
+            render_geometry_3d(
+                self.axes,
+                figures,
+                (x_min, x_max),
+                y_limits,
+                dark_mode=self._dark_mode_var.get(),
+                preserve_view=preserve_view,
+            )
+            self.canvas.draw_idle()
             return
         selected = [
             PlotSeries(f"{item.identifier}(x) = {item.expression}", item.function, item.color)
