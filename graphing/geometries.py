@@ -28,11 +28,11 @@ def render_geometry_2d(
     preserve_view: bool = False,
 ) -> None:
     view_limits = (axes.get_xlim(), axes.get_ylim()) if preserve_view else None
-    background = "#29322d" if dark_mode else "#ffffff"
-    foreground = "#e6ece7" if dark_mode else "#18231d"
-    muted = "#a3b0a7" if dark_mode else "#657168"
-    grid = "#3d4942" if dark_mode else "#e5e9e3"
-    spine = "#536158" if dark_mode else "#d8ded7"
+    background = "#162d3a" if dark_mode else "#ffffff"
+    foreground = "#dff7ff" if dark_mode else "#16384a"
+    muted = "#96bacb" if dark_mode else "#66879a"
+    grid = "#294858" if dark_mode else "#dceaf0"
+    spine = "#3d6678" if dark_mode else "#c8dae3"
     axes.clear()
     axes.set_facecolor(background)
     axes.set_xlim(*(view_limits[0] if view_limits else x_limits))
@@ -116,9 +116,9 @@ def render_geometry_3d(
     view_limits = (
         (axes.get_xlim(), axes.get_ylim(), axes.get_zlim()) if preserve_view else None
     )
-    background = "#29322d" if dark_mode else "#ffffff"
-    foreground = "#e6ece7" if dark_mode else "#18231d"
-    grid = "#3d4942" if dark_mode else "#e5e9e3"
+    background = "#162d3a" if dark_mode else "#ffffff"
+    foreground = "#dff7ff" if dark_mode else "#16384a"
+    grid = "#294858" if dark_mode else "#dceaf0"
     axes.clear()
     axes.set_facecolor(background)
     axes.set_xlim(*x_limits)

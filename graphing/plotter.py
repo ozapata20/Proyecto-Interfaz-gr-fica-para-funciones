@@ -45,13 +45,14 @@ class PlotRenderer:
     ) -> None:
         axes = self.axes
         view_limits = (axes.get_xlim(), axes.get_ylim()) if preserve_view else None
-        background = "#29322d" if dark_mode else "#ffffff"
-        foreground = "#e6ece7" if dark_mode else "#18231d"
-        muted = "#a3b0a7" if dark_mode else "#657168"
-        grid = "#3d4942" if dark_mode else "#e5e9e3"
-        spine_color = "#536158" if dark_mode else "#d8ded7"
+        background = "#162d3a" if dark_mode else "#ffffff"
+        foreground = "#dff7ff" if dark_mode else "#16384a"
+        muted = "#96bacb" if dark_mode else "#66879a"
+        grid = "#294858" if dark_mode else "#dceaf0"
+        spine_color = "#3d6678" if dark_mode else "#c8dae3"
         axes.clear()
         axes.set_facecolor(background)
+        axes.set_aspect("auto", adjustable="box")
         axes.set_xlim(x_min, x_max)
         if y_limits is not None:
             axes.set_ylim(*y_limits)
@@ -65,8 +66,8 @@ class PlotRenderer:
             axis_spine.set_color(spine_color)
         self._create_cursor_artists()
         if dark_mode:
-            self._cursor_vertical.set_color("#b8c8bd")
-            self._cursor_horizontal.set_color("#b8c8bd")
+            self._cursor_vertical.set_color("#96bacb")
+            self._cursor_horizontal.set_color("#96bacb")
             self._cursor_label.set_color(foreground)
             self._cursor_label.set_bbox(
                 {
@@ -160,10 +161,10 @@ class PlotRenderer:
 
     def _create_cursor_artists(self) -> None:
         self._cursor_vertical = self.axes.axvline(
-            0, color="#59665d", linewidth=0.8, linestyle="--", alpha=0.75, visible=False, zorder=4
+            0, color="#66879a", linewidth=0.8, linestyle="--", alpha=0.75, visible=False, zorder=4
         )
         self._cursor_horizontal = self.axes.axhline(
-            0, color="#59665d", linewidth=0.8, linestyle="--", alpha=0.75, visible=False, zorder=4
+            0, color="#66879a", linewidth=0.8, linestyle="--", alpha=0.75, visible=False, zorder=4
         )
         self._cursor_label = self.axes.text(
             0.98,
@@ -172,9 +173,9 @@ class PlotRenderer:
             transform=self.axes.transAxes,
             ha="right",
             va="top",
-            color="#26332b",
+            color="#16384a",
             fontsize=9,
-            bbox={"boxstyle": "round,pad=0.35", "facecolor": "#ffffff", "edgecolor": "#d8ded7", "alpha": 0.94},
+            bbox={"boxstyle": "round,pad=0.35", "facecolor": "#ffffff", "edgecolor": "#c8dae3", "alpha": 0.94},
             visible=False,
             zorder=7,
         )

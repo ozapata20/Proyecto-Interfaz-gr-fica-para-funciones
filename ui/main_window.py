@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ctypes
+import sys
 import tkinter as tk
 from dataclasses import dataclass
+from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Callable
 
@@ -11,6 +14,7 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from PIL import Image, ImageTk
 
 from graphing.geometries import GeometricFigure, render_geometry_2d, render_geometry_3d
 from graphing.intersections import IntersectionPoint, find_intersections
@@ -71,14 +75,40 @@ def _next_function_identifier(used: set[str]) -> str:
 class GraphingApplication:
     """Build and run the complete graphing application window."""
 
-    _PALETTE = ("#137c63", "#d96845", "#3779b7", "#b38222", "#8a5a9e", "#338a91")
+    _PALETTE = ("#28c5f5", "#0077b6", "#56d8ff", "#00a8cc", "#5eb8ff", "#74d5d6")
 
     def __init__(self) -> None:
+        assets_directory = Path(__file__).resolve().parent.parent / "assets"
+        if sys.platform == "win32":
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("GraphiX.Studio")
         self.root = tk.Tk()
-        self.root.title("Visualizador de funciones y geometría")
+        self.root.title("GraphiX")
         self.root.geometry("1600x900")
         self.root.minsize(900, 600)
-        self.root.configure(background="#f2f4ef")
+        self.root.configure(background="#eef7fb")
+        self._app_icon = tk.PhotoImage(file=str(assets_directory / "GraphiX.png"))
+        self.root.iconphoto(True, self._app_icon)
+        self.root.iconbitmap(str(assets_directory / "GraphiX.ico"))
+        try:
+            self._studio_logo = tk.PhotoImage(file=str(assets_directory / "Logo2.png")).subsample(4, 4)
+        except tk.TclError:
+            self._studio_logo = None
+        try:
+            gear_image = Image.open(assets_directory / "Engranaje.png").convert("RGBA")
+            gear_image = gear_image.resize((34, 34), Image.Resampling.LANCZOS)
+            self._gear_icon = ImageTk.PhotoImage(gear_image)
+            menu_image = Image.open(assets_directory / "Menu.png").convert("RGBA")
+            menu_image = menu_image.resize((34, 34), Image.Resampling.LANCZOS)
+            self._menu_icon = ImageTk.PhotoImage(menu_image)
+            panel_image = Image.open(assets_directory / "icon3.png").convert("RGBA")
+            panel_image = panel_image.resize((38, 36), Image.Resampling.LANCZOS)
+            self._panel_icon_right = ImageTk.PhotoImage(panel_image)
+            self._panel_icon_left = ImageTk.PhotoImage(panel_image.transpose(Image.Transpose.ROTATE_180))
+        except (OSError, tk.TclError):
+            self._gear_icon = None
+            self._menu_icon = None
+            self._panel_icon_right = None
+            self._panel_icon_left = None
         self._items: list[FunctionItem] = []
         self._geometry_items: dict[str, list[GeometryItem]] = {
             "Geometría 2D": [],
@@ -116,20 +146,24 @@ class GraphingApplication:
         style = ttk.Style(self.root)
         if "clam" in style.theme_names():
             style.theme_use("clam")
-        style.configure("App.TFrame", background="#f2f4ef")
+        style.configure("App.TFrame", background="#eef7fb")
         style.configure("Panel.TFrame", background="#ffffff")
-        style.configure("TLabel", background="#f2f4ef", foreground="#18231d", font=("Segoe UI", 10))
-        style.configure("Title.TLabel", font=("Segoe UI Semibold", 22), foreground="#18231d")
-        style.configure("Section.TLabel", font=("Segoe UI Semibold", 11), foreground="#26332b")
-        style.configure("Muted.TLabel", foreground="#728077", font=("Segoe UI", 9))
-        style.configure("Count.TLabel", foreground="#137c63", font=("Segoe UI Semibold", 10))
+        style.configure("TLabel", background="#eef7fb", foreground="#16384a", font=("Segoe UI", 10))
+        style.configure("Title.TLabel", font=("Segoe UI Semibold", 22), foreground="#16384a")
+        style.configure("Section.TLabel", font=("Segoe UI Semibold", 11), foreground="#214c62")
+        style.configure("Muted.TLabel", foreground="#66879a", font=("Segoe UI", 9))
+        style.configure("Count.TLabel", foreground="#009bd8", font=("Segoe UI Semibold", 10))
         style.configure("FunctionRow.TFrame", background="#ffffff")
         style.configure("FunctionRow.TLabel", background="#ffffff")
-        style.configure("TButton", font=("Segoe UI Semibold", 10), padding=(14, 9))
-        style.configure("Accent.TButton", background="#137c63", foreground="#ffffff")
-        style.map("Accent.TButton", background=[("active", "#0e654f"), ("pressed", "#0a5542")])
-        style.configure("Info.TButton", font=("Segoe UI Symbol", 12), padding=(6, 4))
-        style.configure("Mode.TButton", anchor="w", padding=(14, 12))
+        style.configure("TButton", font=("Segoe UI Semibold", 10), padding=(14, 9), relief="flat")
+        style.configure("Accent.TButton", background="#009bd8", foreground="#ffffff", borderwidth=0)
+        style.map(
+            "Accent.TButton",
+            background=[("active", "#28c5f5"), ("pressed", "#0077b6"), ("disabled", "#a9cfde")],
+            foreground=[("disabled", "#eef7fb")],
+        )
+        style.configure("Info.TButton", font=("Segoe UI Symbol", 12), padding=(6, 4), relief="flat")
+        style.configure("Mode.TButton", anchor="w", padding=(14, 12), relief="flat")
         style.configure("Close.TButton", padding=(6, 3))
         style.configure("TEntry", padding=(10, 9), fieldbackground="#ffffff")
         style.configure("TCheckbutton", background="#ffffff")
@@ -147,10 +181,20 @@ class GraphingApplication:
 
         heading = ttk.Frame(graph_pane, style="App.TFrame")
         heading.grid(row=0, column=0, sticky="ew", pady=(0, 14))
-        self.chart_title = ttk.Label(heading, text="      Funciones", style="Title.TLabel")
-        self.chart_title.pack(anchor="w")
-        self.chart_subtitle = ttk.Label(heading, text="                PLANO CARTESIANO", style="Muted.TLabel")
-        self.chart_subtitle.pack(anchor="w", pady=(3, 0))
+        if self._studio_logo is not None:
+            self.chart_title = tk.Label(
+                heading,
+                image=self._studio_logo,
+                background="#eef7fb",
+                borderwidth=0,
+                highlightthickness=0,
+            )
+            self.chart_title.pack(anchor="w")
+        else:
+            self.chart_title = ttk.Label(heading, text="GraphiX Studio", style="Title.TLabel")
+            self.chart_title.pack(anchor="w")
+        self.chart_subtitle = ttk.Label(heading, text="PLANO CARTESIANO", style="Muted.TLabel")
+        self.chart_subtitle.pack(anchor="w", pady=(2, 0))
 
         chart_frame = ttk.Frame(graph_pane, style="Panel.TFrame", padding=8)
         chart_frame.grid(row=1, column=0, sticky="nsew")
@@ -221,6 +265,8 @@ class GraphingApplication:
         self.mode_menu = ttk.Frame(self.root, style="Panel.TFrame", padding=20)
         self.mode_menu.place(relx=0, rely=0, relwidth=0.25, relheight=1)
         self.mode_menu.place_forget()
+        self._mode_menu_animation_job: str | None = None
+        self._mode_menu_target_visible = False
         self._build_mode_menu()
 
         ttk.Label(self.function_pane, text="Funciones", style="Title.TLabel").grid(row=0, column=0, sticky="w")
@@ -551,24 +597,70 @@ class GraphingApplication:
         self._render()
 
     def _draw_mode_toggle(self) -> None:
-        background = "#f2f4ef" if not self._dark_mode_var.get() else "#1e2521"
-        foreground = "#18231d" if not self._dark_mode_var.get() else "#e6ece7"
+        background = "#eef7fb" if not self._dark_mode_var.get() else "#101c24"
+        foreground = "#16384a" if not self._dark_mode_var.get() else "#dff7ff"
         self.mode_toggle.configure(background=background)
         self.mode_toggle.delete("all")
-        self.mode_toggle.create_oval(2, 2, 40, 40, fill=background, outline=foreground, width=1.2)
-        for y in (13, 20, 27):
-            self.mode_toggle.create_line(13, y, 29, y, fill=foreground, width=2, capstyle=tk.ROUND)
+        if self._menu_icon is not None:
+            self.mode_toggle.create_image(21, 21, image=self._menu_icon)
+        else:
+            self.mode_toggle.create_oval(2, 2, 40, 40, fill=background, outline=foreground, width=1.2)
+            for y in (13, 20, 27):
+                self.mode_toggle.create_line(13, y, 29, y, fill=foreground, width=2, capstyle=tk.ROUND)
 
     def _toggle_mode_menu(self, _event: tk.Event[tk.Misc] | None = None) -> None:
         if self.mode_menu.winfo_ismapped():
             self._hide_mode_menu()
             return
-        self.mode_menu.place(relx=0, rely=0, relwidth=0.25, relheight=1)
+        self._mode_menu_target_visible = True
         self.mode_menu.lift()
+        self._animate_mode_menu(opening=True)
 
     def _hide_mode_menu(self) -> None:
-        self.mode_menu.place_forget()
-        self.root.tk.call("raise", self.mode_toggle._w)
+        self._mode_menu_target_visible = False
+        self._animate_mode_menu(opening=False)
+
+    def _animate_mode_menu(self, *, opening: bool) -> None:
+        if self._mode_menu_animation_job is not None:
+            try:
+                self.root.after_cancel(self._mode_menu_animation_job)
+            except tk.TclError:
+                pass
+            self._mode_menu_animation_job = None
+
+        width = max(1, int(self.root.winfo_width() * 0.25))
+        duration = 220
+        start = -width if opening else 0
+        end = 0 if opening else -width
+
+        def step(elapsed_ms: int) -> None:
+            progress = min(1.0, elapsed_ms / duration)
+            eased = 1.0 - (1.0 - progress) ** 3
+            x_position = int(start + (end - start) * eased)
+            self.mode_menu.place(
+                x=x_position,
+                y=0,
+                width=width,
+                height=self.root.winfo_height(),
+                relwidth=0,
+                relheight=0,
+            )
+
+            if progress < 1.0:
+                self._mode_menu_animation_job = self.root.after(16, lambda: step(elapsed_ms + 16))
+            else:
+                self._mode_menu_animation_job = None
+                if opening:
+                    self.mode_menu.place(x=0, y=0, width=width, height=self.root.winfo_height())
+                else:
+                    self.mode_menu.place_forget()
+                    self.root.tk.call("raise", self.mode_toggle._w)
+
+        if opening:
+            self.mode_menu.place(x=start, y=0, width=width, height=self.root.winfo_height())
+        else:
+            self.mode_menu.place(x=start, y=0, width=width, height=self.root.winfo_height())
+        step(0)
 
     def _update_mode_buttons(self) -> None:
         for mode, button in self._mode_buttons.items():
@@ -580,41 +672,48 @@ class GraphingApplication:
             pane.grid_remove()
         if mode == "Funciones":
             self.function_pane.grid()
-            self.chart_title.configure(text="Plano Cartesiano")
             self.chart_subtitle.configure(text="FUNCIONES")
         else:
             self._geometry_panes[mode].grid(row=0, column=0, sticky="nsew")
-            self.chart_title.configure(text="Plano Cartesiano" if mode == "Geometría 2D" else "Espacio tridimensional")
             self.chart_subtitle.configure(text=mode.upper())
         self._update_mode_buttons()
         projection = "3d" if mode == "Geometría 3D" else "2d"
         if projection != self._projection:
-            self.axes.remove()
-            self.axes = self.figure.add_subplot(
-                111,
-                projection="3d" if projection == "3d" else None,
-            )
-            self.plotter = PlotRenderer(self.figure, self.axes, self.canvas.draw_idle)
-            self._projection = projection
-            self.toolbar._nav_stack.clear()
-            self.toolbar.update()
+            self._replace_plot_axes(projection)
         self._hide_mode_menu()
         self._render(preserve_view=False)
+        self.root.after_idle(self._stabilize_canvas)
+
+    def _replace_plot_axes(self, projection: str) -> None:
+        self.figure.clear()
+        self.axes = self.figure.add_subplot(
+            111,
+            projection="3d" if projection == "3d" else None,
+        )
+        self._projection = projection
+        self.plotter = PlotRenderer(self.figure, self.axes, self.canvas.draw_idle)
+        self.toolbar._nav_stack.clear()
+        self.toolbar.update()
+        self.canvas.mpl_connect("motion_notify_event", self._on_plot_motion)
+        self.figure.subplots_adjust(left=0.08, right=0.98, bottom=0.10, top=0.98)
+        self.canvas.draw_idle()
+
+    def _stabilize_canvas(self) -> None:
+        self.figure.subplots_adjust(left=0.08, right=0.98, bottom=0.10, top=0.98)
+        self.canvas.draw_idle()
 
     def _draw_panel_toggle(self) -> None:
-        background = "#f2f4ef" if not self._dark_mode_var.get() else "#1e2521"
-        foreground = "#18231d" if not self._dark_mode_var.get() else "#e6ece7"
+        background = "#eef7fb" if not self._dark_mode_var.get() else "#101c24"
+        foreground = "#16384a" if not self._dark_mode_var.get() else "#dff7ff"
         self.panel_toggle.configure(background=background)
         self.panel_toggle.delete("all")
-        self.panel_toggle.create_oval(2, 2, 40, 40, fill=background, outline=foreground, width=1.5)
-        arrow = (17, 12, 25, 21, 17, 30) if self._controls_visible else (25, 12, 17, 21, 25, 30)
-        self._panel_arrow_id = self.panel_toggle.create_line(
-            *arrow,
-            fill=foreground,
-            width=2.5,
-            capstyle=tk.ROUND,
-            joinstyle=tk.ROUND,
-        )
+        icon = self._panel_icon_right if self._controls_visible else self._panel_icon_left
+        if icon is not None:
+            self.panel_toggle.create_image(21, 21, image=icon)
+        else:
+            self.panel_toggle.create_oval(2, 2, 40, 40, fill=background, outline=foreground, width=1.5)
+            arrow = (17, 12, 25, 21, 17, 30) if self._controls_visible else (25, 12, 17, 21, 25, 30)
+            self.panel_toggle.create_line(*arrow, fill=foreground, width=2.5, capstyle=tk.ROUND, joinstyle=tk.ROUND)
         self._position_panel_toggle()
 
     def _position_panel_toggle(self) -> None:
@@ -629,12 +728,15 @@ class GraphingApplication:
             self.root.after_idle(self._position_panel_toggle)
 
     def _draw_settings_button(self) -> None:
-        background = "#f2f4ef" if not self._dark_mode_var.get() else "#1e2521"
-        foreground = "#18231d" if not self._dark_mode_var.get() else "#e6ece7"
+        background = "#eef7fb" if not self._dark_mode_var.get() else "#101c24"
+        foreground = "#16384a" if not self._dark_mode_var.get() else "#dff7ff"
         self.settings_button.configure(background=background)
         self.settings_button.delete("all")
-        self.settings_button.create_oval(2, 2, 38, 38, fill=background, outline=foreground, width=1.2)
-        self.settings_button.create_text(20, 20, text="⚙", fill=foreground, font=("Segoe UI Symbol", 17))
+        if self._gear_icon is not None:
+            self.settings_button.create_image(20, 20, image=self._gear_icon)
+        else:
+            self.settings_button.create_oval(2, 2, 38, 38, fill=background, outline=foreground, width=1.2)
+            self.settings_button.create_text(20, 20, text="⚙", fill=foreground, font=("Segoe UI Symbol", 17))
 
     def _toggle_control_pane(self, _event: tk.Event[tk.Misc] | None = None) -> None:
         self._controls_visible = not self._controls_visible
@@ -669,7 +771,7 @@ class GraphingApplication:
         window.title("Configuración")
         window.transient(self.root)
         window.resizable(False, False)
-        window.configure(background="#f2f4ef")
+        window.configure(background="#eef7fb")
         window.protocol("WM_DELETE_WINDOW", self._close_settings)
         content = ttk.Frame(window, style="App.TFrame", padding=22)
         content.grid(sticky="nsew")
@@ -777,14 +879,14 @@ class GraphingApplication:
     def _apply_theme(self, *, redraw: bool = True) -> None:
         dark = self._dark_mode_var.get()
         colors = {
-            "background": "#1e2521" if dark else "#f2f4ef",
-            "panel": "#29322d" if dark else "#ffffff",
-            "foreground": "#e6ece7" if dark else "#18231d",
-            "muted": "#a3b0a7" if dark else "#728077",
-            "section": "#d5ded8" if dark else "#26332b",
-            "grid": "#3d4942" if dark else "#e5e9e3",
-            "axis": "#a3b0a7" if dark else "#657168",
-            "spine": "#536158" if dark else "#d8ded7",
+            "background": "#101c24" if dark else "#eef7fb",
+            "panel": "#162d3a" if dark else "#ffffff",
+            "foreground": "#dff7ff" if dark else "#16384a",
+            "muted": "#96bacb" if dark else "#66879a",
+            "section": "#c8efff" if dark else "#214c62",
+            "grid": "#294858" if dark else "#dceaf0",
+            "axis": "#96bacb" if dark else "#66879a",
+            "spine": "#3d6678" if dark else "#c8dae3",
         }
         style = ttk.Style(self.root)
         self.root.configure(background=colors["background"])
@@ -796,7 +898,7 @@ class GraphingApplication:
         style.configure("Title.TLabel", foreground=colors["foreground"])
         style.configure("Section.TLabel", foreground=colors["section"])
         style.configure("Muted.TLabel", foreground=colors["muted"])
-        style.configure("Count.TLabel", foreground="#58c5a4" if dark else "#137c63")
+        style.configure("Count.TLabel", foreground="#56d8ff" if dark else "#009bd8")
         style.configure("TCheckbutton", background=colors["background"], foreground=colors["foreground"])
         style.map(
             "TCheckbutton",
@@ -805,8 +907,8 @@ class GraphingApplication:
         )
         style.configure("TEntry", fieldbackground=colors["panel"], foreground=colors["foreground"])
         style.configure("TButton", background=colors["panel"], foreground=colors["foreground"])
-        style.configure("Accent.TButton", background="#137c63", foreground="#ffffff")
-        style.map("Accent.TButton", background=[("active", "#0e654f"), ("pressed", "#0a5542")])
+        style.configure("Accent.TButton", background="#009bd8", foreground="#ffffff")
+        style.map("Accent.TButton", background=[("active", "#28c5f5"), ("pressed", "#0077b6")])
         style.configure(
             "Treeview",
             background=colors["panel"],
@@ -820,7 +922,7 @@ class GraphingApplication:
         )
         style.map(
             "Treeview",
-            background=[("selected", "#137c63")],
+            background=[("selected", "#0077b6")],
             foreground=[("selected", "#ffffff")],
         )
         style.configure("TScrollbar", background=colors["panel"], troughcolor=colors["background"])
@@ -829,6 +931,8 @@ class GraphingApplication:
             list_canvas.configure(background=colors["panel"])
         self.canvas.get_tk_widget().configure(background=colors["panel"])
         self.toolbar.configure(background=colors["background"])
+        if isinstance(self.chart_title, tk.Label):
+            self.chart_title.configure(background=colors["background"])
         self.figure.set_facecolor(colors["panel"])
         self._draw_settings_button()
         self._draw_mode_toggle()
@@ -935,7 +1039,7 @@ class GraphingApplication:
         window.title(f"Información de {item.identifier}(x)")
         window.transient(self.root)
         window.resizable(False, False)
-        window.configure(background="#1e2521" if self._dark_mode_var.get() else "#f2f4ef")
+        window.configure(background="#101c24" if self._dark_mode_var.get() else "#eef7fb")
         content = ttk.Frame(window, style="App.TFrame", padding=22)
         content.grid(sticky="nsew")
         ttk.Label(

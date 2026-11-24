@@ -36,6 +36,13 @@ class PlotRendererTests(unittest.TestCase):
 
         self.assertEqual(self.axes.get_xlim(), (-5, 5))
 
+    def test_resets_equal_aspect_from_geometry_before_rendering_functions(self) -> None:
+        self.axes.set_aspect("equal", adjustable="box")
+
+        self.renderer.render(self.series, -10, 10)
+
+        self.assertEqual(self.axes.get_aspect(), "auto")
+
 
 if __name__ == "__main__":
     unittest.main()
